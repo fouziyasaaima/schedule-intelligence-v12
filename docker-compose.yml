@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orbital
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+      POSTGRES_DB: orbital_gantt
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbital -d orbital_gantt"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://orbital:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/orbital_gantt?schema=public
+      PORT: 4000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-Schedule Intelligence <no-reply@example.com>}
+      EMAIL_BRAND_NAME: ${EMAIL_BRAND_NAME:-Schedule Intelligence}
+      DEV_SEED: ${DEV_SEED:-true}
+      SEED_USER_EMAIL: ${SEED_USER_EMAIL:-demo@example.com}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-ChangeMe123!ChangeMe}
+      SEED_API_KEY: ${SCHEDULE_INTELLIGENCE_DEV_API_KEY:-ogk_local_change_this_key_please}
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ui:
+    build:
+      context: ../../ui/orbital-gantt-ui
+      args:
+        API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:4000}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
