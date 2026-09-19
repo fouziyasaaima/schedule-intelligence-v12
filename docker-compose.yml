@@ -1,0 +1,107 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orbital
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+      POSTGRES_DB: orbital_gantt
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbital -d orbital_gantt"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8026:8025"
+
+  api:
+    build:
+      context: ./api/orbital-gantt-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://orbital:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/orbital_gantt?schema=public
+      PORT: 4000
+      CORS_ORIGINS: http://localhost:3010
+      APP_URL: http://localhost:3010
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-Schedule Intelligence <no-reply@example.com>}
+      EMAIL_BRAND_NAME: ${EMAIL_BRAND_NAME:-Schedule Intelligence}
+      DEV_SEED: ${DEV_SEED:-true}
+      SEED_USER_EMAIL: ${SEED_USER_EMAIL:-demo@example.com}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-ChangeMe123!ChangeMe}
+      SEED_API_KEY: ${SCHEDULE_INTELLIGENCE_DEV_API_KEY:-ogk_local_change_this_key_please}
+      CONNECTOR_ENCRYPTION_KEY: ${CONNECTOR_ENCRYPTION_KEY:-local-connector-key-change-me}
+      CONNECTOR_DESTINATION_POLICY: ${CONNECTOR_DESTINATION_POLICY:-private}
+      PRMS_API_BASE_URL: ${PRMS_API_BASE_URL:-https://prmscloud.com}
+      PRMS_TOKEN_URL: ${PRMS_TOKEN_URL:-https://prmscloud.com/api/account/token}
+      PRMS_CLIENT_ID: ${PRMS_CLIENT_ID:-}
+      PRMS_CLIENT_SECRET: ${PRMS_CLIENT_SECRET:-}
+      PRMS_BEARER_TOKEN: ${PRMS_BEARER_TOKEN:-}
+      PRMS_TOKEN_CACHE_SECONDS: ${PRMS_TOKEN_CACHE_SECONDS:-300}
+      MAC_ENABLED: ${MAC_ENABLED:-true}
+      MAC_DEFAULT_PROVIDER: ${MAC_DEFAULT_PROVIDER:-gemini}
+      MAC_DEFAULT_MODEL: ${MAC_DEFAULT_MODEL:-gemini-3.5-flash-lite}
+      MAC_DAILY_BUDGET_USD: ${MAC_DAILY_BUDGET_USD:-1.00}
+      MAC_MONTHLY_BUDGET_USD: ${MAC_MONTHLY_BUDGET_USD:-10.00}
+      MAC_MAX_REQUEST_COST_USD: ${MAC_MAX_REQUEST_COST_USD:-0.05}
+      MAC_MAX_TOKENS_PER_REQUEST: ${MAC_MAX_TOKENS_PER_REQUEST:-12000}
+      MAC_REQUIRE_CONFIRMATION_ABOVE_USD: ${MAC_REQUIRE_CONFIRMATION_ABOVE_USD:-0.02}
+      MAC_CACHE_ENABLED: ${MAC_CACHE_ENABLED:-true}
+      MAC_DATA_POLICY: ${MAC_DATA_POLICY:-MINIMAL}
+      MAC_AUTONOMOUS_WATCH: ${MAC_AUTONOMOUS_WATCH:-false}
+      MAC_WATCH_INTERVAL_MINUTES: ${MAC_WATCH_INTERVAL_MINUTES:-60}
+      MAC_NOTIFY_EMAIL: ${MAC_NOTIFY_EMAIL:-false}
+      MAC_AUTONOMOUS_SCHEDULING: ${MAC_AUTONOMOUS_SCHEDULING:-false}
+      MAC_AUTO_APPLY_DEPENDENCIES: ${MAC_AUTO_APPLY_DEPENDENCIES:-false}
+      MAC_AUTO_OPTIMIZE_DATES: ${MAC_AUTO_OPTIMIZE_DATES:-false}
+      MAC_ALLOW_RESOURCE_REASSIGNMENT: ${MAC_ALLOW_RESOURCE_REASSIGNMENT:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      AI_WATCH_ENABLED: ${AI_WATCH_ENABLED:-false}
+      AI_WATCH_INTERVAL_MINUTES: ${AI_WATCH_INTERVAL_MINUTES:-60}
+      AI_NOTIFY_EMAIL: ${AI_NOTIFY_EMAIL:-false}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+    ports:
+      - "127.0.0.1:4010:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ui:
+    build:
+      context: ./ui/orbital-gantt-ui
+      args:
+        API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:4000}
+        NEXT_PUBLIC_APP_URL: http://localhost:3010
+        NEXT_PUBLIC_APP_VERSION: ${NEXT_PUBLIC_APP_VERSION:-16.1.0}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3010:3000"
+
+volumes:
+  pg_data:
+    external: true
+    name: pg_data
