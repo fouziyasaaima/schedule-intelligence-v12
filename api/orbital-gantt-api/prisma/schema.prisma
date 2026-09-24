@@ -1,0 +1,655 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy & auth
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  apiKeys      ApiKey[]
+  projects     Project[]
+  resources    Resource[]
+  memberships  Membership[]
+  invitations  Invitation[]
+  auditLogs    AuditLog[]
+  connectors   Connector[]
+  aiScheduleRuns AiScheduleRun[]
+
+  @@map("organizations")
+  macSettings    MacSettings?
+}
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  label          String
+  keyHash        String    @unique @map("key_hash")
+  scopes         String[]  @default(["projects:read", "projects:write", "connectors:read", "connectors:write"])
+  createdAt      DateTime  @default(now()) @map("created_at")
+  revokedAt      DateTime? @map("revoked_at")
+
+  @@map("api_keys")
+}
+
+
+model User {
+  id              String       @id @default(cuid())
+  email           String       @unique
+  passwordHash    String       @map("password_hash")
+  firstName       String       @map("first_name")
+  lastName        String       @map("last_name")
+  emailVerifiedAt DateTime?    @map("email_verified_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  memberships     Membership[]
+  sessions        Session[]
+  invitations     Invitation[] @relation("InvitedBy")
+  auditLogs       AuditLog[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens      PasswordResetToken[]
+  @@map("users")
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  PROJECT_MANAGER
+  PLANNER
+  RESOURCE_MANAGER
+  CONTRIBUTOR
+  VIEWER
+}
+
+model Membership {
+  id             String           @id @default(cuid())
+  organizationId String           @map("organization_id")
+  userId         String           @map("user_id")
+  role           OrganizationRole @default(VIEWER)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  tokenHash  String   @unique @map("token_hash")
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  organizationId String           @map("organization_id")
+  email          String
+  role           OrganizationRole @default(CONTRIBUTOR)
+  tokenHash      String           @unique @map("token_hash")
+  expiresAt      DateTime         @map("expires_at")
+  acceptedAt     DateTime?        @map("accepted_at")
+  invitedById    String           @map("invited_by_id")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy      User             @relation("InvitedBy", fields: [invitedById], references: [id])
+  @@index([organizationId, email])
+  @@map("invitations")
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  userId         String?      @map("user_id")
+  action         String
+  resourceType   String?      @map("resource_type")
+  resourceId     String?      @map("resource_id")
+  ipAddress      String?      @map("ip_address")
+  userAgent      String?      @map("user_agent")
+  metadata       Json?
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+
+model EmailVerificationToken {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  tokenHash      String   @unique @map("token_hash")
+  expiresAt      DateTime @map("expires_at")
+  usedAt         DateTime? @map("used_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  tokenHash      String   @unique @map("token_hash")
+  expiresAt      DateTime @map("expires_at")
+  usedAt         DateTime? @map("used_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Core scheduling
+// ---------------------------------------------------------------------------
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  CLOSED
+}
+
+model Project {
+  id             String        @id @default(cuid())
+  organizationId String        @map("organization_id")
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  name           String
+  description    String?
+  startDate      DateTime      @map("start_date")
+  status         ProjectStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  tasks        Task[]
+  dependencies Dependency[]
+  snapshots    ScheduleSnapshot[]
+  scenarios    Scenario[]
+  forecastRuns ForecastRun[]
+  aiScheduleRuns AiScheduleRun[]
+  resourceLinks ProjectResource[]
+
+  @@map("projects")
+}
+
+enum TaskType {
+  SUMMARY
+  TASK
+  MILESTONE
+}
+
+enum TaskStatus {
+  ACTIVE
+  ON_HOLD
+  CLOSED
+  DELAYED
+}
+
+model Task {
+  id        String    @id @default(cuid())
+  projectId String    @map("project_id")
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentId  String?   @map("parent_id")
+  parent    Task?     @relation("TaskChildren", fields: [parentId], references: [id])
+  children  Task[]    @relation("TaskChildren")
+
+  taskType    TaskType   @default(TASK) @map("task_type")
+  name        String
+  description String?
+  customFields Json @default("{}") @map("custom_fields")
+
+  // Inputs — either dragged or typed directly, same field either way
+  expectedStart DateTime @map("expected_start")
+  expectedEnd   DateTime @map("expected_end")
+  durationDays  Int      @map("duration_days")
+
+  actualStart DateTime? @map("actual_start")
+  actualEnd   DateTime? @map("actual_end")
+
+  // Goal date, distinct from the computed schedule (see architecture discussion)
+  targetDate     DateTime? @map("target_date")
+  targetFeasible Boolean?  @map("target_feasible")
+
+  progressPct Int        @default(0) @map("progress_pct")
+  status      TaskStatus @default(ACTIVE)
+
+  // true once a user directly types/drags this task's own dates — pins it so
+  // upstream recomputes don't silently move it again.
+  isManualSchedule Boolean @default(false) @map("is_manual_schedule")
+
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  predecessorLinks Dependency[] @relation("Predecessor")
+  successorLinks   Dependency[] @relation("Successor")
+  assignments      Assignment[]
+  scheduleResult   ScheduleResult?
+  insights         Insight[]
+
+  @@index([projectId])
+  @@map("tasks")
+}
+
+enum DependencyType {
+  FINISH_TO_START
+  START_TO_START
+  FINISH_TO_FINISH
+  START_TO_FINISH
+}
+
+model Dependency {
+  id              String          @id @default(cuid())
+  projectId       String          @map("project_id")
+  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  predecessorId   String          @map("predecessor_task_id")
+  predecessor     Task            @relation("Predecessor", fields: [predecessorId], references: [id], onDelete: Cascade)
+  successorId     String          @map("successor_task_id")
+  successor       Task            @relation("Successor", fields: [successorId], references: [id], onDelete: Cascade)
+  dependencyType  DependencyType  @default(FINISH_TO_START) @map("dependency_type")
+  lagDays         Int             @default(0) @map("lag_days")
+  isActive        Boolean         @default(true) @map("is_active")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@index([projectId])
+  @@unique([projectId, predecessorId, successorId], map: "dependencies_project_predecessor_successor_key")
+  @@map("dependencies")
+}
+
+// ---------------------------------------------------------------------------
+// Resources — lean allocation data only (no chat, no member CRM, see discussion)
+// ---------------------------------------------------------------------------
+
+enum ResourceType {
+  PERSON
+  EQUIPMENT
+  FACILITY
+  VEHICLE
+  MATERIAL
+  TEAM
+  OTHER
+}
+
+model Resource {
+  id                  String   @id @default(cuid())
+  organizationId      String   @map("organization_id")
+  organization        Organization @relation(fields: [organizationId], references: [id])
+  name                String
+  role                String?
+  type                ResourceType @default(PERSON)
+  capacityHoursPerDay Float    @default(8) @map("capacity_hours_per_day")
+  capacityUnits       Float    @default(1) @map("capacity_units")
+  unitLabel           String   @default("unit") @map("unit_label")
+  availabilityPct     Int      @default(100) @map("availability_pct")
+  isActive            Boolean  @default(true) @map("is_active")
+  customFields        Json     @default("{}") @map("custom_fields")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  assignments Assignment[]
+  projectLinks ProjectResource[]
+
+  @@map("resources")
+}
+
+
+model ProjectResource {
+  id         String   @id @default(cuid())
+  projectId  String   @map("project_id")
+  resourceId String   @map("resource_id")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, resourceId])
+  @@index([projectId, active])
+  @@map("project_resources")
+}
+
+model Assignment {
+  id            String   @id @default(cuid())
+  taskId        String   @map("task_id")
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  resourceId    String   @map("resource_id")
+  resource      Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  allocationPct Int      @default(100) @map("allocation_pct")
+  units         Float    @default(1)
+  role          String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([taskId, resourceId])
+  @@map("assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Computed / derived — never written directly by API consumers
+// ---------------------------------------------------------------------------
+
+model ScheduleResult {
+  taskId      String   @id @map("task_id")
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  earlyStart  DateTime @map("early_start")
+  earlyFinish DateTime @map("early_finish")
+  lateStart   DateTime @map("late_start")
+  lateFinish  DateTime @map("late_finish")
+  slackDays   Int      @map("slack_days")
+  isCritical  Boolean  @map("is_critical")
+  computedAt  DateTime @default(now()) @map("computed_at")
+
+  @@map("schedule_results")
+}
+
+model ScheduleSnapshot {
+  id            String   @id @default(cuid())
+  projectId     String   @map("project_id")
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  label         String
+  taskStateJson Json     @map("task_state_json")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("schedule_snapshots")
+}
+
+enum InsightKind {
+  RISK_SCORE
+  SUMMARY
+  FORECAST
+  SUGGESTION
+}
+
+model Insight {
+  id        String      @id @default(cuid())
+  taskId    String?     @map("task_id")
+  task      Task?       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId String      @map("project_id")
+  kind      InsightKind
+  payload   Json
+  confidence Float?
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  @@map("insights")
+}
+
+// ---------------------------------------------------------------------------
+// Scenario intelligence & forecast history
+// ---------------------------------------------------------------------------
+
+model Scenario {
+  id          String           @id @default(cuid())
+  projectId   String           @map("project_id")
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  status      String           @default("DRAFT")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  changes     ScenarioChange[]
+
+  @@index([projectId])
+  @@map("scenarios")
+}
+
+model ScenarioChange {
+  id            String   @id @default(cuid())
+  scenarioId    String   @map("scenario_id")
+  scenario     Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  taskId        String   @map("task_id")
+  expectedStart DateTime? @map("expected_start")
+  expectedEnd   DateTime? @map("expected_end")
+  durationDays  Int?     @map("duration_days")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([scenarioId])
+  @@map("scenario_changes")
+}
+
+model ForecastRun {
+  id             String   @id @default(cuid())
+  projectId      String   @map("project_id")
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  iterations    Int
+  uncertaintyPct Float   @map("uncertainty_pct")
+  result        Json
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([projectId, createdAt])
+  @@map("forecast_runs")
+}
+
+
+// ---------------------------------------------------------------------------
+// Universal integration / synchronization layer
+// ---------------------------------------------------------------------------
+
+enum ConnectorAuthType {
+  NONE
+  API_KEY
+  BEARER
+  BASIC
+  OAUTH2_AUTHORIZATION_CODE
+  OAUTH2_CLIENT_CREDENTIALS
+  CUSTOM_HEADERS
+}
+
+enum ConnectorStatus {
+  DRAFT
+  CONNECTED
+  ERROR
+  DISABLED
+}
+
+enum ConnectorSyncDirection {
+  IMPORT
+  EXPORT
+  BIDIRECTIONAL
+}
+
+model Connector {
+  id             String                 @id @default(cuid())
+  organizationId String                 @map("organization_id")
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  provider       String                 @default("generic-rest")
+  baseUrl        String                 @map("base_url")
+  authType       ConnectorAuthType     @default(NONE) @map("auth_type")
+  status         ConnectorStatus       @default(DRAFT)
+  direction      ConnectorSyncDirection @default(IMPORT)
+  config         Json                   @default("{}")
+  secretCiphertext String?              @map("secret_ciphertext")
+  lastTestedAt   DateTime?              @map("last_tested_at")
+  lastSyncAt     DateTime?              @map("last_sync_at")
+  lastError      String?                @map("last_error")
+  createdAt      DateTime               @default(now()) @map("created_at")
+  updatedAt      DateTime               @updatedAt @map("updated_at")
+
+  mappings       ConnectorMapping[]
+  identities     ConnectorIdentity[]
+  syncRuns       ConnectorSyncRun[]
+  webhooks       ConnectorWebhook[]
+  oauthStates    ConnectorOAuthState[]
+
+  @@index([organizationId, status])
+  @@map("connectors")
+}
+
+model ConnectorMapping {
+  id             String     @id @default(cuid())
+  connectorId    String     @map("connector_id")
+  connector      Connector  @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  entityType     String     @map("entity_type")
+  externalField  String     @map("external_field")
+  internalField  String     @map("internal_field")
+  direction      String     @default("IMPORT")
+  transform      Json       @default("{}")
+  required       Boolean    @default(false)
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  @@index([connectorId, entityType])
+  @@map("connector_mappings")
+}
+
+model ConnectorIdentity {
+  id          String    @id @default(cuid())
+  connectorId String    @map("connector_id")
+  connector   Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  entityType  String    @map("entity_type")
+  internalId  String    @map("internal_id")
+  externalId  String    @map("external_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([connectorId, entityType, externalId])
+  @@unique([connectorId, entityType, internalId])
+  @@index([connectorId, entityType])
+  @@map("connector_identities")
+}
+
+model ConnectorSyncRun {
+  id           String    @id @default(cuid())
+  connectorId  String    @map("connector_id")
+  connector   Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  direction    String
+  status       String
+  recordsRead  Int       @default(0) @map("records_read")
+  recordsCreated Int     @default(0) @map("records_created")
+  recordsUpdated Int     @default(0) @map("records_updated")
+  recordsFailed Int      @default(0) @map("records_failed")
+  details      Json      @default("{}")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  error       String?
+
+  @@index([connectorId, startedAt])
+  @@map("connector_sync_runs")
+}
+
+model ConnectorWebhook {
+  id          String    @id @default(cuid())
+  connectorId String    @map("connector_id")
+  connector   Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique @map("token_hash")
+  secretHash  String?   @map("secret_hash")
+  eventTypes  String[]  @default([]) @map("event_types")
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  lastReceivedAt DateTime? @map("last_received_at")
+
+  @@index([connectorId, enabled])
+  @@map("connector_webhooks")
+}
+
+
+// ---------------------------------------------------------------------------
+// MAC — Schedule Intelligence's reasoning engine
+// Cost controls, model routing and auditable usage. Secrets remain in env/secret
+// storage; this table stores provider/model choices and non-sensitive policy.
+// ---------------------------------------------------------------------------
+
+model MacSettings {
+  id                         String   @id @default(cuid())
+  organizationId             String   @unique @map("organization_id")
+  organization               Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  enabled                    Boolean  @default(true)
+  provider                   String   @default("gemini")
+  model                      String   @default("gemini-3.5-flash-lite")
+  dailyBudgetUsd             Float    @default(1) @map("daily_budget_usd")
+  monthlyBudgetUsd           Float    @default(10) @map("monthly_budget_usd")
+  maxRequestCostUsd          Float    @default(0.05) @map("max_request_cost_usd")
+  maxTokensPerRequest        Int      @default(12000) @map("max_tokens_per_request")
+  requireConfirmationAboveUsd Float   @default(0.02) @map("require_confirmation_above_usd")
+  cacheEnabled               Boolean  @default(true) @map("cache_enabled")
+  dataPolicy                 String   @default("MINIMAL") @map("data_policy")
+  autonomousWatch            Boolean  @default(false) @map("autonomous_watch")
+  watchIntervalMinutes       Int      @default(60) @map("watch_interval_minutes")
+  notifyEmail                Boolean  @default(false) @map("notify_email")
+  autonomousScheduling       Boolean  @default(false) @map("autonomous_scheduling")
+  autoApplyDependencies      Boolean  @default(false) @map("auto_apply_dependencies")
+  autoOptimizeDates          Boolean  @default(false) @map("auto_optimize_dates")
+  allowResourceReassignment  Boolean  @default(false) @map("allow_resource_reassignment")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+
+  usage                      MacUsage[]
+
+  @@map("mac_settings")
+}
+
+model MacUsage {
+  id             String      @id @default(cuid())
+  organizationId String      @map("organization_id")
+  projectId      String?     @map("project_id")
+  settingsId     String?     @map("settings_id")
+  provider       String
+  model          String
+  requestKind    String      @map("request_kind")
+  inputTokens    Int?       @map("input_tokens")
+  outputTokens   Int?       @map("output_tokens")
+  estimatedCostUsd Float     @default(0) @map("estimated_cost_usd")
+  actualCostUsd Float       @default(0) @map("actual_cost_usd")
+  cacheHit       Boolean     @default(false) @map("cache_hit")
+  contextHash    String?     @map("context_hash")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  settings       MacSettings? @relation(fields: [settingsId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, projectId, createdAt])
+  @@map("mac_usage")
+}
+
+model AiScheduleRun {
+  id                       String   @id @default(cuid())
+  organizationId           String   @map("organization_id")
+  projectId                String   @map("project_id")
+  organization             Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project                  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  mode                     String
+  status                   String
+  provider                 String?
+  model                    String?
+  taskCount                Int      @default(0) @map("task_count")
+  dependencyProposals      Int      @default(0) @map("dependency_proposals")
+  dependenciesApplied      Int      @default(0) @map("dependencies_applied")
+  datesProposed            Int      @default(0) @map("dates_proposed")
+  datesApplied             Int      @default(0) @map("dates_applied")
+  resourceProposals        Int      @default(0) @map("resource_proposals")
+  resourceAssignmentsApplied Int    @default(0) @map("resource_assignments_applied")
+  estimatedCostUsd         Float    @default(0) @map("estimated_cost_usd")
+  actualCostUsd            Float    @default(0) @map("actual_cost_usd")
+  summary                  String?
+  changes                  Json     @default("{}")
+  createdAt                DateTime @default(now()) @map("created_at")
+  completedAt              DateTime? @map("completed_at")
+  error                    String?
+
+  @@index([organizationId, projectId, createdAt])
+  @@map("ai_schedule_runs")
+}
+
+model ConnectorOAuthState {
+  id          String    @id @default(cuid())
+  connectorId String    @map("connector_id")
+  connector   Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  stateHash   String    @unique @map("state_hash")
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  @@index([connectorId, expiresAt])
+  @@map("connector_oauth_states")
+}

@@ -1,0 +1,1 @@
+"use client";export function CompanyOnboarding({onDone}:{onDone:()=>void}){return <div className="auth-loading"><div><h2>Workspace ready</h2><p>Your organization is created. You can now build your first Gantt and manage Developer API access from the workspace settings.</p><button className="auth-primary" onClick={onDone}>Open Schedule Intelligence</button></div></div>}
