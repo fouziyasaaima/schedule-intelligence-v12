@@ -1,0 +1,134 @@
+name: schedule-intelligence
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orbital}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+      POSTGRES_DB: ${POSTGRES_DB:-orbital_gantt}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orbital} -d ${POSTGRES_DB:-orbital_gantt}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [si]
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    profiles: ["local"]
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8026}:8025"
+    networks: [si]
+
+  api:
+    build:
+      context: ./api/orbital-gantt-api
+      args:
+        APP_VERSION: 20.3.5
+        EMBED_AUTO_SYNC_PRMS: ${EMBED_AUTO_SYNC_PRMS:-true}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-orbital}:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/${POSTGRES_DB:-orbital_gantt}?schema=public
+      PORT: 4000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-Schedule Intelligence <no-reply@example.com>}
+      SMTP_REPLY_TO: ${SMTP_REPLY_TO:-}
+      EMAIL_BRAND_NAME: ${EMAIL_BRAND_NAME:-Schedule Intelligence}
+      DEV_SEED: ${DEV_SEED:-false}
+      SEED_USER_EMAIL: ${SEED_USER_EMAIL:-demo@example.com}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-ChangeMe123!ChangeMe}
+      SEED_API_KEY: ${SCHEDULE_INTELLIGENCE_DEV_API_KEY:-}
+      CONNECTOR_ENCRYPTION_KEY: ${CONNECTOR_ENCRYPTION_KEY:-local-connector-key-change-me}
+      CONNECTOR_DESTINATION_POLICY: ${CONNECTOR_DESTINATION_POLICY:-private}
+      CONNECTOR_ALLOWED_PRIVATE_HOSTS: ${CONNECTOR_ALLOWED_PRIVATE_HOSTS:-}
+      CONNECTOR_EVENT_WORKER_ENABLED: ${CONNECTOR_EVENT_WORKER_ENABLED:-true}
+      CONNECTOR_EVENT_WORKER_BATCH: ${CONNECTOR_EVENT_WORKER_BATCH:-25}
+      CONNECTOR_EVENT_MAX_ATTEMPTS: ${CONNECTOR_EVENT_MAX_ATTEMPTS:-5}
+      CONNECTOR_EVENT_RETRY_BACKOFF_SECONDS: ${CONNECTOR_EVENT_RETRY_BACKOFF_SECONDS:-30}
+      EMBED_TOKEN_SECRET: ${EMBED_TOKEN_SECRET:-local-embed-secret-change-me-please-32chars}
+      EMBED_APP_URL: ${EMBED_APP_URL:-http://localhost:3000}
+      PRMS_API_BASE_URL: ${PRMS_API_BASE_URL:-https://prmscloud.com}
+      PRMS_TOKEN_URL: ${PRMS_TOKEN_URL:-https://prmscloud.com/api/account/token}
+      PRMS_CLIENT_ID: ${PRMS_CLIENT_ID:-}
+      PRMS_CLIENT_SECRET: ${PRMS_CLIENT_SECRET:-}
+      PRMS_BEARER_TOKEN: ${PRMS_BEARER_TOKEN:-}
+      PRMS_TOKEN_CACHE_SECONDS: ${PRMS_TOKEN_CACHE_SECONDS:-300}
+      MAC_ENABLED: ${MAC_ENABLED:-true}
+      MAC_DEFAULT_PROVIDER: ${MAC_DEFAULT_PROVIDER:-gemini}
+      MAC_DEFAULT_MODEL: ${MAC_DEFAULT_MODEL:-gemini-3.5-flash-lite}
+      MAC_DAILY_BUDGET_USD: ${MAC_DAILY_BUDGET_USD:-1.00}
+      MAC_MONTHLY_BUDGET_USD: ${MAC_MONTHLY_BUDGET_USD:-10.00}
+      MAC_MAX_REQUEST_COST_USD: ${MAC_MAX_REQUEST_COST_USD:-0.05}
+      MAC_MAX_TOKENS_PER_REQUEST: ${MAC_MAX_TOKENS_PER_REQUEST:-12000}
+      MAC_REQUIRE_CONFIRMATION_ABOVE_USD: ${MAC_REQUIRE_CONFIRMATION_ABOVE_USD:-0.02}
+      MAC_CACHE_ENABLED: ${MAC_CACHE_ENABLED:-true}
+      MAC_DATA_POLICY: ${MAC_DATA_POLICY:-MINIMAL}
+      MAC_AUTONOMOUS_WATCH: ${MAC_AUTONOMOUS_WATCH:-false}
+      MAC_WATCH_INTERVAL_MINUTES: ${MAC_WATCH_INTERVAL_MINUTES:-60}
+      MAC_NOTIFY_EMAIL: ${MAC_NOTIFY_EMAIL:-false}
+      MAC_AUTONOMOUS_SCHEDULING: ${MAC_AUTONOMOUS_SCHEDULING:-false}
+      MAC_AUTO_APPLY_DEPENDENCIES: ${MAC_AUTO_APPLY_DEPENDENCIES:-false}
+      MAC_AUTO_OPTIMIZE_DATES: ${MAC_AUTO_OPTIMIZE_DATES:-false}
+      MAC_ALLOW_RESOURCE_REASSIGNMENT: ${MAC_ALLOW_RESOURCE_REASSIGNMENT:-false}
+      MAC_CHAT_AUTO_APPLY: ${MAC_CHAT_AUTO_APPLY:-true}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      AI_WATCH_ENABLED: ${AI_WATCH_ENABLED:-false}
+      AI_WATCH_INTERVAL_MINUTES: ${AI_WATCH_INTERVAL_MINUTES:-60}
+      AI_NOTIFY_EMAIL: ${AI_NOTIFY_EMAIL:-false}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+    expose:
+      - "4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - si
+
+  ui:
+    build:
+      context: ./ui/orbital-gantt-ui
+      args:
+        API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:4000}
+        NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:3000}
+        NEXT_PUBLIC_APP_VERSION: 20.3.5
+        EMBED_ALLOWED_ORIGINS: ${EMBED_ALLOWED_ORIGINS:-*}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${SI_UI_PORT:-3000}:3000"
+    networks:
+      - si
+
+volumes:
+  pg_data:
+    external: true
+    name: ${POSTGRES_VOLUME_NAME:-pg_data}
+
+networks:
+  si:
+    driver: bridge

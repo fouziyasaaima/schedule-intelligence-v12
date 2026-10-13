@@ -1,0 +1,10 @@
+name: schedule-intelligence-testing
+
+services:
+  api:
+    ports:
+      - "127.0.0.1:${SI_API_PORT:-4000}:4000"
+
+  ui:
+    ports:
+      - "127.0.0.1:${SI_UI_PORT:-3000}:3000"
